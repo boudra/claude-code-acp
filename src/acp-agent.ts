@@ -98,12 +98,14 @@ export class ClaudeAcpAgent implements Agent {
   fileContentCache: { [key: string]: string };
   backgroundTerminals: { [key: string]: BackgroundTerminal } = {};
   clientCapabilities?: ClientCapabilities;
+  resumeSessionId?: string;
 
-  constructor(client: AgentSideConnection) {
+  constructor({ client, resumeSessionId }: { client: AgentSideConnection; resumeSessionId?: string }) {
     this.sessions = {};
     this.client = client;
     this.toolUseCache = {};
     this.fileContentCache = {};
+    this.resumeSessionId = resumeSessionId;
   }
 
   async initialize(request: InitializeRequest): Promise<InitializeResponse> {
@@ -215,6 +217,9 @@ export class ClaudeAcpAgent implements Agent {
       executable: process.execPath as any,
       ...(process.env.CLAUDE_CODE_EXECUTABLE && {
         pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_EXECUTABLE,
+      }),
+      ...(this.resumeSessionId && {
+        resume: this.resumeSessionId,
       }),
     };
 
@@ -822,10 +827,10 @@ export function streamEventToAcpNotifications(
   }
 }
 
-export function runAcp() {
+export function runAcp({ resumeSessionId }: { resumeSessionId?: string } = {}) {
   const input = nodeToWebWritable(process.stdout);
   const output = nodeToWebReadable(process.stdin);
 
   const stream = ndJsonStream(input, output);
-  new AgentSideConnection((client) => new ClaudeAcpAgent(client), stream);
+  new AgentSideConnection((client) => new ClaudeAcpAgent({ client, resumeSessionId }), stream);
 }

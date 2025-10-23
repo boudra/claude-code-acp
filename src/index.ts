@@ -1,5 +1,12 @@
 #!/usr/bin/env node
 
+import minimist from "minimist";
+
+// Parse CLI arguments
+const args = minimist(process.argv.slice(2), {
+  string: ["resume"],
+});
+
 // Load managed settings and apply environment variables
 import { loadManagedSettings, applyEnvironmentSettings } from "./utils.js";
 
@@ -20,7 +27,9 @@ process.on("unhandledRejection", (reason, promise) => {
 });
 
 import { runAcp as runAcp } from "./acp-agent.js";
-runAcp();
+runAcp({
+  resumeSessionId: args.resume,
+});
 
 // Keep process alive
 process.stdin.resume();
