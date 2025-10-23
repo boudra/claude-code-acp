@@ -55,6 +55,8 @@ import {
 } from "./tools.js";
 import { ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import { BetaContentBlock, BetaRawContentBlockDelta } from "@anthropic-ai/sdk/resources/beta.mjs";
+import readline from "readline";
+import { createReadStream } from "fs";
 
 type Session = {
   query: Query;
@@ -274,6 +276,13 @@ export class ClaudeAcpAgent implements Agent {
       });
     }, 0);
 
+    // Replay session history if resuming
+    if (this.resumeSessionId) {
+      setTimeout(async () => {
+        await this.replaySessionHistory(this.resumeSessionId!);
+      }, 10); // Small delay to ensure session is established
+    }
+
     const availableModes = [
       {
         id: "default",
@@ -308,6 +317,94 @@ export class ClaudeAcpAgent implements Agent {
         availableModes,
       },
     };
+  }
+
+  async replaySessionHistory(sessionId: string): Promise<void> {
+    // Build path to JSONL file
+    const projectPath = process.cwd().replace(/\//g, '-');
+    const sessionFile = path.join(
+      os.homedir(),
+      '.claude/projects',
+      projectPath,
+      `${sessionId}.jsonl`
+    );
+
+    // Check if file exists
+    if (!fs.existsSync(sessionFile)) {
+      console.error(`Session history file not found: ${sessionFile}`);
+      return;
+    }
+
+    // Read and parse JSONL
+    const entries: any[] = [];
+    const fileStream = createReadStream(sessionFile);
+    const rl = readline.createInterface({
+      input: fileStream,
+      crlfDelay: Infinity
+    });
+
+    for await (const line of rl) {
+      try {
+        const entry = JSON.parse(line);
+        entries.push(entry);
+      } catch (error) {
+        console.error('Error parsing JSONL line:', error);
+      }
+    }
+
+    // Convert and emit each entry
+    for (const entry of entries) {
+      const notifications = this.convertEntryToNotifications(entry, sessionId);
+      for (const notification of notifications) {
+        await this.client.sessionUpdate(notification);
+      }
+    }
+  }
+
+  convertEntryToNotifications(entry: any, sessionId: string): SessionNotification[] {
+    const notifications: SessionNotification[] = [];
+
+    // Handle different entry types
+    if (entry.type === 'user' && entry.message) {
+      const content = entry.message.content || entry.message;
+      const userNotifications = toAcpNotifications(
+        content,
+        'user',
+        sessionId,
+        this.toolUseCache,
+        this.fileContentCache
+      );
+      notifications.push(...userNotifications);
+
+    } else if (entry.type === 'assistant' && entry.message) {
+      const message = entry.message;
+
+      // Handle complete assistant messages
+      if (message.content) {
+        const assistantNotifications = toAcpNotifications(
+          message.content,
+          'assistant',
+          sessionId,
+          this.toolUseCache,
+          this.fileContentCache
+        );
+        notifications.push(...assistantNotifications);
+      }
+
+    } else if (entry.message?.content?.[0]?.type === 'tool_result') {
+      // Handle tool results
+      const toolResult = entry.message.content[0];
+      const toolResultNotifications = toAcpNotifications(
+        [toolResult],
+        'user', // Tool results come from user role
+        sessionId,
+        this.toolUseCache,
+        this.fileContentCache
+      );
+      notifications.push(...toolResultNotifications);
+    }
+
+    return notifications;
   }
 
   async authenticate(_params: AuthenticateRequest): Promise<void> {
